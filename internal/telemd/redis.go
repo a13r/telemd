@@ -128,7 +128,7 @@ func (reporter *RedisReporter) Run() {
 			}
 		case stop := <-reporter.stopped:
 			if stop {
-				break
+				return
 			}
 		}
 	}

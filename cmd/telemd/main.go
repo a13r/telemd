@@ -48,10 +48,11 @@ func main() {
 	daemon := telemd.NewDaemon(cfg)
 	commandServer := telemd.NewRedisCommandServer(daemon, reconnectingClient.Client)
 	telemetryReporter := telemd.NewRedisReporter(daemon, reconnectingClient.Client)
+	var state redis.ConnectionState
 
 	go func() {
 		for {
-			state := <-reconnectingClient.ConnectionState
+			state = <-reconnectingClient.ConnectionState
 			switch state {
 			case redis.Connected:
 				go commandServer.Run()
@@ -64,7 +65,7 @@ func main() {
 				daemon.PauseTickers()
 				commandServer.Stop()
 				go telemetryReporter.Stop()
-				go reconnectingClient.Client.Ping()
+				go reconnectingClient.InitiateConnection()
 			case redis.Recovered:
 				daemon.UnpauseTickers()
 				go commandServer.Run()
@@ -80,15 +81,17 @@ func main() {
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		<-sigs
 		log.Println("stopping daemon")
-		commandServer.Stop()
-		_ = commandServer.RemoveNodeInfo()
-		telemetryReporter.Stop()
+		if state == redis.Connected || state == redis.Recovered {
+			commandServer.Stop()
+			_ = commandServer.RemoveNodeInfo()
+			telemetryReporter.Stop()
+		}
 		daemon.Stop()
-		close(reconnectingClient.ConnectionState)
+		reconnectingClient.Close()
 	}()
 
 	// initiate redis connection by sending a PING
-	go reconnectingClient.Client.Ping()
+	go reconnectingClient.InitiateConnection()
 
 	log.Println("running daemon")
 	daemon.Run() // blocks until everything has shut down after daemon.Stop()

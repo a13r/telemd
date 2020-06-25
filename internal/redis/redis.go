@@ -3,6 +3,7 @@ package redis
 import (
 	goredis "github.com/go-redis/redis/v7"
 	"math"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,7 @@ const (
 type ReconnectingClient struct {
 	Client          *goredis.Client
 	ConnectionState chan ConnectionState
+	pingMu          sync.Mutex
 }
 
 func NewReconnectingClient(options *goredis.Options, retryBackoff time.Duration) *ReconnectingClient {
@@ -24,7 +26,10 @@ func NewReconnectingClient(options *goredis.Options, retryBackoff time.Duration)
 	client := goredis.NewClient(options)
 	options.MaxRetries = math.MaxInt32
 	options.Limiter = newLimiter(retryBackoff, connectionState)
-	return &ReconnectingClient{client, connectionState}
+	return &ReconnectingClient{
+		Client:          client,
+		ConnectionState: connectionState,
+	}
 }
 
 func NewReconnectingClientFromUrl(url string, retryBackoff time.Duration) (*ReconnectingClient, error) {
@@ -34,4 +39,16 @@ func NewReconnectingClientFromUrl(url string, retryBackoff time.Duration) (*Reco
 		return nil, err
 	}
 	return NewReconnectingClient(options, retryBackoff), nil
+}
+
+func (c *ReconnectingClient) InitiateConnection() {
+	// ensure there is only one ping
+	c.pingMu.Lock()
+	c.Client.Ping()
+	c.pingMu.Unlock()
+}
+
+func (c *ReconnectingClient) Close() {
+	_ = c.Client.Close()
+	close(c.ConnectionState)
 }
